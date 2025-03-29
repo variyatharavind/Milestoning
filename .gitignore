@@ -35,4 +35,4 @@ ENV/
 .coverage
 htmlcov/
 .pytest_cache/
-.tox/ 
+.tox/
