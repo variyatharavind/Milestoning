@@ -1,10 +1,40 @@
 ---
-description:
-globs:
+description: 
+globs: 
 alwaysApply: true
 ---
+# Cursor Rules for Milestoner Project
 
-# Your rule content
+## File Structure Rules
+- Source code changes must have corresponding test changes
+- Documentation must be updated when code changes
+- Test files should mirror source file structure
 
-- You can @ files here
-- You can use markdown but dont have to
+## Naming Conventions
+- Source files: snake_case.py
+- Test files: test_snake_case.py
+- Classes: PascalCase
+- Methods: snake_case
+- Private methods: _snake_case
+
+## Documentation Requirements
+- All public methods must have docstrings
+- README.md must be updated for new features
+- Design decisions must be documented
+
+## Test Requirements
+- Each source file must have a corresponding test file
+- Test cases should cover both success and failure scenarios
+- Test data should be realistic and well-documented
+
+## Code Organization
+- Related functionality should be grouped in the same file
+- Common utilities should be in a shared location
+- Configuration should be separate from implementation
+
+## Example
+When adding a new feature:
+1. Update source code in src/milestoner/
+2. Add corresponding tests in tests/
+3. Update README.md with new feature details
+4. Update any relevant documentation 
