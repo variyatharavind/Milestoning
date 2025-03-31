@@ -132,6 +132,18 @@ class BitemporalMilestoner:
         components = snake_str.lower().split('_')
         return components[0] + ''.join(x.title() for x in components[1:])
     
+    def _get_data_fields_select(self) -> str:
+        """
+        Generate the SELECT clause for extracting data fields from the variant column.
+        
+        Returns:
+            String containing the SELECT clause for data fields
+        """
+        return ', '.join(
+            f"DATA:{self._snake_to_camel(col)}::STRING as {col}"
+            for col in self.data_columns
+        )
+    
     def _get_merge_query(
         self,
         staging_table: str,
@@ -152,15 +164,10 @@ class BitemporalMilestoner:
             SQL query to merge records
         """
         # Extract data fields from variant column
-        data_fields = [
-            f"DATA:{self._snake_to_camel(col)}::STRING as {col}"
-            for col in self.data_columns
-        ]
-        
         # Create unique staging records CTE
         unique_staging = f"""
         SELECT
-            {', '.join(data_fields)},
+            {self._get_data_fields_select()},
             {ROW_CHECKSUM_COL},
             {STAGING_GUID_COL}, 
             {ROW_ADDED_DATETIME_COL},
@@ -195,13 +202,13 @@ class BitemporalMilestoner:
                 ])}
             )
             VALUES (
-                {', '.join(self.data_columns)},
+                {', '.join(f"s.{col}" for col in self.data_columns)},
                 s.{self.temporal_column},
                 NULL,
                 '{current_time}',
                 NULL,
-                {ROW_CHECKSUM_COL},
-                {STAGING_GUID_COL},
+                s.{ROW_CHECKSUM_COL},
+                s.{STAGING_GUID_COL},
                 '{batch_id}'
             );
         
