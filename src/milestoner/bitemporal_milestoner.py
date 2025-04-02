@@ -4,11 +4,24 @@ from typing import List, Dict, Any
 import uuid
 
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+# Create console handler
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+
+# Create formatter
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
+# Add formatter to console handler
+console_handler.setFormatter(formatter)
+
+# Add console handler to logger
+logger.addHandler(console_handler)
+
+STAGING_SCHEMA = 'STAGING'
+CONFORMED_SCHEMA = 'CONFORMED'
 
 # Global column names for temporal tracking
 VALID_FROM_COL = 'VALID_FROM'
@@ -28,7 +41,7 @@ MILESTONING_FLAG_COL = 'MILESTONING_FLAG'
 FLAG_DUPLICATE = 'DUPLICATE'
 FLAG_INVALID_DATA = 'INVALID_DATA'
 FLAG_MISSING_REQUIRED = 'MISSING_REQUIRED'
-FLAG_PROCESSED = 'PROCESSED'
+FLAG_PROCESSED = 'null'
 
 class BitemporalMilestoner:
     """
@@ -76,13 +89,17 @@ class BitemporalMilestoner:
             SQL query to lock records
         """
         return f"""
-        UPDATE {staging_table}
+        UPDATE {STAGING_SCHEMA}.{staging_table}
         SET {LOCKED_COL} = '{batch_id}',
             {MILESTONING_FLAG_COL} = NULL
-        WHERE {PROCESSED_DATETIME_COL} IS NULL
-        AND {LOCKED_COL} IS NULL
-        ORDER BY {ROW_ADDED_DATETIME_COL} ASC
-        LIMIT {batch_size}
+        WHERE {STAGING_GUID_COL} IN (
+            SELECT {STAGING_GUID_COL}
+            FROM {STAGING_SCHEMA}.{staging_table}
+            WHERE {PROCESSED_DATETIME_COL} IS NULL
+            AND {LOCKED_COL} IS NULL
+            ORDER BY {ROW_ADDED_DATETIME_COL} ASC
+            LIMIT {batch_size}
+        )
         """
     
     def _get_duplicate_detection_query(
@@ -101,22 +118,21 @@ class BitemporalMilestoner:
             SQL query to identify duplicates
         """
         return f"""
-        WITH ranked_records AS (
-            SELECT *,
-                ROW_NUMBER() OVER (
-                    PARTITION BY {ROW_CHECKSUM_COL}
-                    ORDER BY {ROW_ADDED_DATETIME_COL} ASC
-                ) as rn
-            FROM {staging_table}
-            WHERE {BATCH_ID_COL} = '{batch_id}'
-        )
-        UPDATE {staging_table} t
+        UPDATE {STAGING_SCHEMA}.{staging_table} t
         SET {MILESTONING_FLAG_COL} = '{FLAG_DUPLICATE}'
         WHERE {STAGING_GUID_COL} IN (
             SELECT {STAGING_GUID_COL}
-            FROM ranked_records
+            FROM (
+                SELECT {STAGING_GUID_COL},
+                    ROW_NUMBER() OVER (
+                        PARTITION BY {ROW_CHECKSUM_COL}
+                        ORDER BY {ROW_ADDED_DATETIME_COL} ASC
+                    ) as rn
+                FROM {STAGING_SCHEMA}.{staging_table}
+                WHERE {LOCKED_COL} = '{batch_id}'
+            ) ranked_records
             WHERE rn > 1
-        )
+        );
         """
     
     def _snake_to_camel(self, snake_str: str) -> str:
@@ -171,8 +187,8 @@ class BitemporalMilestoner:
             {ROW_CHECKSUM_COL},
             {STAGING_GUID_COL}, 
             {ROW_ADDED_DATETIME_COL}
-        FROM {staging_table}
-        WHERE {BATCH_ID_COL} = '{batch_id}'
+        FROM {STAGING_SCHEMA}.{staging_table}
+        WHERE {LOCKED_COL} = '{batch_id}'
         AND {MILESTONING_FLAG_COL} IS NULL
         """
         
@@ -182,7 +198,9 @@ class BitemporalMilestoner:
         
         -- Merge new/changed records
         MERGE INTO {conformed_table} t
-        USING {unique_staging} s
+        USING (
+            {unique_staging}
+        ) s
         ON {' AND '.join(f"t.{key} = s.{key}" for key in self.business_keys)}
         WHEN MATCHED AND t.{VALID_TO_COL} IS NULL AND t.{ROW_CHECKSUM_COL} != s.{ROW_CHECKSUM_COL} THEN
             UPDATE SET
@@ -212,11 +230,12 @@ class BitemporalMilestoner:
             );
         
         -- Mark processed records
-        UPDATE {staging_table}
+        UPDATE {STAGING_SCHEMA}.{staging_table}
         SET {PROCESSED_DATETIME_COL} = '{current_time}',
-            {MILESTONING_FLAG_COL} = '{FLAG_PROCESSED}',
-            {LOCKED_COL} = NULL
-        WHERE {BATCH_ID_COL} = '{batch_id}';
+            {MILESTONING_FLAG_COL} = {FLAG_PROCESSED},
+            {LOCKED_COL} = NULL,
+            {BATCH_ID_COL} = '{batch_id}'
+        WHERE {LOCKED_COL} = '{batch_id}';  
         
         COMMIT;
         """
@@ -254,12 +273,14 @@ class BitemporalMilestoner:
             batch_id,
             batch_size
         )
+        logger.info(f"Lock query: {lock_query}")
         
         # Step 2: Identify duplicates
         duplicate_query = self._get_duplicate_detection_query(
             staging_table,
             batch_id
         )
+        logger.info(f"Duplicate detection query: {duplicate_query}")
         
         # Step 3: Merge records
         merge_query = self._get_merge_query(
@@ -268,6 +289,7 @@ class BitemporalMilestoner:
             batch_id,
             current_time
         )
+        logger.info(f"Merge query: {merge_query}")
         
         # TODO: Execute queries in Snowflake and get results
         

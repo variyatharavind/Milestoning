@@ -1,26 +1,62 @@
 import pytest
 import snowflake.connector
 import uuid
+import json
+import os
 from datetime import datetime
 
 # Test configuration
 TEST_STAGING_SCHEMA = 'STAGING'
 TEST_CONFORMED_SCHEMA = 'CONFORMED'
-TEST_SUFFIX = uuid.uuid4().hex[:8]
+TEST_SUFFIX = '' # uuid.uuid4().hex[:8]
 TEST_STAGING_TABLE = f'TEST_STAGING_{TEST_SUFFIX}'
 TEST_CONFORMED_TABLE = f'TEST_CONFORMED_{TEST_SUFFIX}'
+
+def load_credentials():
+    """
+    Load credentials from the credentials.json file for local development testing.
+    
+    Returns:
+        Dictionary containing the credentials
+    """
+    try:
+        # Get the directory of the current file
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        # Go up to the project root
+        project_root = os.path.dirname(os.path.dirname(current_dir))
+        # Path to the credentials file
+        credentials_path = os.path.join(project_root, 'credentials.json')
+        
+        if not os.path.exists(credentials_path):
+            print(f"Credentials file not found at {credentials_path}")
+            return None
+        
+        with open(credentials_path, 'r') as f:
+            credentials = json.load(f)
+        
+        print("Local development credentials loaded successfully")
+        return credentials.get('snowflake')
+    except Exception as e:
+        print(f"Error loading credentials: {str(e)}")
+        return None
 
 @pytest.fixture(scope="session")
 def snowflake_conn():
     """Create a real Snowflake connection for testing."""
+
+    credentials = load_credentials()
+    
     conn = snowflake.connector.connect(
-        user='YOUR_USER',
-        password='YOUR_PASSWORD',
-        account='YOUR_ACCOUNT',
-        warehouse='TEST_WH',
-        database='TEST_DATABASE'
+        user=credentials.get('user'),
+        password=credentials.get('password'),
+        account=credentials.get('account'),
+        warehouse=credentials.get('warehouse'),
+        database=credentials.get('database'),
+        role=credentials.get('role')
     )
+
     yield conn
+
     conn.close()
 
 @pytest.fixture(scope="session")
@@ -29,22 +65,24 @@ def setup_test_tables(snowflake_conn):
     cursor = snowflake_conn.cursor()
     
     # Create staging table
+    # CREATE OR REPLACE TABLE {TEST_STAGING_SCHEMA}.{TEST_STAGING_TABLE} (
     cursor.execute(f"""
-    CREATE OR REPLACE TABLE {TEST_STAGING_SCHEMA}.{TEST_STAGING_TABLE} (
+    CREATE TABLE IF NOT EXISTS {TEST_STAGING_SCHEMA}.{TEST_STAGING_TABLE} (
         DATA VARIANT,
         ROW_CHECKSUM STRING,
-        STAGING_GUID STRING,
+        STAGING_GUID STRING DEFAULT UUID_STRING(),
         BATCH_ID STRING,
         PROCESSED_DATETIME TIMESTAMP,
-        ROW_ADDED_DATETIME TIMESTAMP,
+        ROW_ADDED_DATETIME TIMESTAMP DEFAULT CURRENT_TIMESTAMP(),
         LOCKED STRING,
         MILESTONING_FLAG STRING
     )
     """)
     
     # Create conformed table
+    # CREATE OR REPLACE TABLE {TEST_CONFORMED_SCHEMA}.{TEST_CONFORMED_TABLE} (
     cursor.execute(f"""
-    CREATE OR REPLACE TABLE {TEST_CONFORMED_SCHEMA}.{TEST_CONFORMED_TABLE} (
+    CREATE TABLE IF NOT EXISTS {TEST_CONFORMED_SCHEMA}.{TEST_CONFORMED_TABLE} (
         USER_ID STRING,
         EMAIL STRING,
         FIRST_NAME STRING,
@@ -63,8 +101,8 @@ def setup_test_tables(snowflake_conn):
     yield
     
     # Cleanup
-    cursor.execute(f"DROP TABLE IF EXISTS {TEST_STAGING_SCHEMA}.{TEST_STAGING_TABLE}")
-    cursor.execute(f"DROP TABLE IF EXISTS {TEST_CONFORMED_SCHEMA}.{TEST_CONFORMED_TABLE}")
+    # cursor.execute(f"DROP TABLE IF EXISTS {TEST_STAGING_SCHEMA}.{TEST_STAGING_TABLE}")
+    # cursor.execute(f"DROP TABLE IF EXISTS {TEST_CONFORMED_SCHEMA}.{TEST_CONFORMED_TABLE}")
     cursor.close()
 
 @pytest.fixture
@@ -146,7 +184,7 @@ def test_data():
                 'userId': '2',
                 'email': 'samson@example.com',
                 'firstName': 'Samson',
-                'lastName': 'Smyth',  # Corrected spelling
+                'lastName': 'Smyth',
                 'effectiveDate': '2024-02-01'
             },
             'row_checksum': 'mno345',
@@ -181,7 +219,7 @@ def test_data():
     }
 
 @pytest.fixture
-def insert_staging_data(snowflake_conn):
+def insert_staging_data(snowflake_conn, setup_test_tables):
     """Helper fixture to insert data into staging table."""
     def _insert(data_list):
         cursor = snowflake_conn.cursor()
@@ -194,7 +232,7 @@ def insert_staging_data(snowflake_conn):
                 ROW_ADDED_DATETIME
             )
             SELECT
-                PARSE_JSON('{data["data"]}'),
+                PARSE_JSON('{json.dumps(data["data"])}'),
                 '{data["row_checksum"]}',
                 '{data["staging_guid"]}',
                 '{data["row_added_datetime"]}'::TIMESTAMP
@@ -203,7 +241,7 @@ def insert_staging_data(snowflake_conn):
     return _insert
 
 @pytest.fixture
-def verify_conformed_data(snowflake_conn):
+def verify_conformed_data(snowflake_conn, setup_test_tables):
     """Helper fixture to verify data in conformed table."""
     def _verify(expected_records):
         cursor = snowflake_conn.cursor()
@@ -212,6 +250,7 @@ def verify_conformed_data(snowflake_conn):
         WHERE VALID_TO IS NULL
         """)
         actual_records = cursor.fetchall()
+        print(actual_records)
         cursor.close()
         
         assert len(actual_records) == len(expected_records)

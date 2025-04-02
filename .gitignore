@@ -31,6 +31,10 @@ ENV/
 *.swp
 *.swo
 
+# Credentials
+credentials.json
+.env
+
 # Testing
 .coverage
 htmlcov/
