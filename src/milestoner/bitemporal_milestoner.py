@@ -170,8 +170,7 @@ class BitemporalMilestoner:
             {self._get_data_fields_select()},
             {ROW_CHECKSUM_COL},
             {STAGING_GUID_COL}, 
-            {ROW_ADDED_DATETIME_COL},
-            {self.temporal_column}
+            {ROW_ADDED_DATETIME_COL}
         FROM {staging_table}
         WHERE {BATCH_ID_COL} = '{batch_id}'
         AND {MILESTONING_FLAG_COL} IS NULL
@@ -184,7 +183,7 @@ class BitemporalMilestoner:
         -- Merge new/changed records
         MERGE INTO {conformed_table} t
         USING {unique_staging} s
-        ON {' AND '.join(f"t.{key.lower()} = s.{key.lower()}" for key in self.business_keys)}
+        ON {' AND '.join(f"t.{key} = s.{key}" for key in self.business_keys)}
         WHEN MATCHED AND t.{VALID_TO_COL} IS NULL AND t.{ROW_CHECKSUM_COL} != s.{ROW_CHECKSUM_COL} THEN
             UPDATE SET
                 {VALID_TO_COL} = s.{self.temporal_column},
